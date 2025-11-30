@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    background: #0a0a0a;
+    color: #00ff41;
+    font-family: 'Courier New', monospace;
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+#header {
+    background: linear-gradient(180deg, #1a1a1a 0%, #0d0d0d 100%);
+    border-bottom: 2px solid #00ff41;
+    padding: 12px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    box-shadow: 0 0 20px rgba(0, 255, 65, 0.3);
+}
+
+#header-left {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+#status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+#status-indicator {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #ff0000;
+    box-shadow: 0 0 10px #ff0000;
+    animation: pulse 2s infinite;
+}
+
+#status-indicator.connected {
+    background: #00ff41;
+    box-shadow: 0 0 10px #00ff41;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+#terminal-title {
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    font-weight: bold;
+    text-shadow: 0 0 10px #00ff41;
+}
+
+#stats {
+    display: flex;
+    gap: 20px;
+    font-size: 11px;
+    color: #00cc33;
+}
+
+#log-container {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    background: #000;
+    position: relative;
+}
+
+#log-container::-webkit-scrollbar {
+    width: 10px;
+}
+
+#log-container::-webkit-scrollbar-track {
+    background: #0a0a0a;
+}
+
+#log-container::-webkit-scrollbar-thumb {
+    background: #00ff41;
+    border-radius: 5px;
+}
+
+#log {
+    font-size: 14px;
+    line-height: 1.6;
+}
+
+.message {
+    margin: 8px 0;
+    padding: 8px 12px;
+    border-left: 3px solid transparent;
+    animation: fadeIn 0.3s ease-in;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateX(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+.message.sent {
+    border-left-color: #0099ff;
+    color: #0099ff;
+}
+
+.message.received {
+    border-left-color: #00ff41;
+    color: #00ff41;
+}
+
+.message.system {
+    border-left-color: #ffaa00;
+    color: #ffaa00;
+    font-style: italic;
+}
+
+.message.error {
+    border-left-color: #ff0000;
+    color: #ff0000;
+}
+
+.timestamp {
+    color: #666;
+    font-size: 11px;
+    margin-right: 10px;
+}
+
+.prefix {
+    font-weight: bold;
+    margin-right: 8px;
+}
+
+#input-container {
+    background: #0d0d0d;
+    border-top: 2px solid #00ff41;
+    padding: 15px 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    box-shadow: 0 0 20px rgba(0, 255, 65, 0.2);
+}
+
+#prompt {
+    color: #00ff41;
+    font-size: 16px;
+    font-weight: bold;
+    text-shadow: 0 0 5px #00ff41;
+}
+
+#inp {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: #00ff41;
+    font-family: 'Courier New', monospace;
+    font-size: 16px;
+    outline: none;
+    padding: 8px;
+    caret-color: #00ff41;
+}
+
+#inp::placeholder {
+    color: #004400;
+}
+
+.scanline {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(
+        to bottom,
+        rgba(0, 0, 0, 0) 50%,
+        rgba(0, 255, 65, 0.02) 51%
+    );
+    background-size: 100% 4px;
+    pointer-events: none;
+    animation: scan 8s linear infinite;
+}
+
+@keyframes scan {
+    0% { transform: translateY(0); }
+    100% { transform: translateY(100vh); }
+}
+</style>
+</head>
+<body>
+
+<div id="header">
+    <div id="header-left">
+        <div id="status">
+            <div id="status-indicator"></div>
+            <span id="status-text">DISCONNECTED</span>
+        </div>
+        <div id="terminal-title">⚡ Adversary Terminal v2.3</div>
+    </div>
+    <div id="stats">
+        <span>UPTIME: <span id="uptime">00:00:00</span></span>
+        <span>MSGS: <span id="msg-count">0</span></span>
+    </div>
+</div>
+
+<div id="log-container">
+    <div id="log"></div>
+</div>
+
+<div id="input-container">
+    <span id="prompt">root@adversary:~$</span>
+    <input id="inp" placeholder="enter your message..." autocomplete="off" />
+</div>
+
+<div class="scanline"></div>
+
+<script>
+let ws;
+let msgCount = 0;
+let startTime = Date.now();
+let reconnectAttempts = 0;
+const maxReconnectAttempts = 5;
+
+function log(message, type = 'received') {
+    const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false });
+    const prefix = {
+        'sent': '[TX]',
+        'received': '[RX]',
+        'system': '[SYS]',
+        'error': '[ERR]'
+    }[type];
+    
+    document.getElementById("log").innerHTML += 
+        `<div class="message ${type}">` +
+        `<span class="timestamp">[${timestamp}]</span>` +
+        `<span class="prefix">${prefix}</span>` +
+        `${message}` +
+        `</div>`;
+    
+    const container = document.getElementById("log-container");
+    container.scrollTop = container.scrollHeight;
+    
+    if (type !== 'system') {
+        msgCount++;
+        document.getElementById("msg-count").textContent = msgCount;
+    }
+}
+
+function updateStatus(connected) {
+    const indicator = document.getElementById("status-indicator");
+    const statusText = document.getElementById("status-text");
+    
+    if (connected) {
+        indicator.classList.add("connected");
+        statusText.textContent = "CONNECTED";
+        statusText.style.color = "#00ff41";
+    } else {
+        indicator.classList.remove("connected");
+        statusText.textContent = "DISCONNECTED";
+        statusText.style.color = "#ff0000";
+    }
+}
+
+function connect() {
+    log("Initializing connection to server...", "system");
+    
+    try {
+        ws = new WebSocket("ws://localhost:8080");
+        
+        ws.onopen = () => {
+            log("Connection established successfully", "system");
+            updateStatus(true);
+            reconnectAttempts = 0;
+        };
+        
+        ws.onmessage = (e) => {
+            log(e.data);
+        };
+        
+        ws.onclose = () => {
+            log("Connection terminated", "error");
+            updateStatus(false);
+            
+            if (reconnectAttempts < maxReconnectAttempts) {
+                reconnectAttempts++;
+                log(`Attempting reconnect (${reconnectAttempts}/${maxReconnectAttempts})...`, "system");
+                setTimeout(connect, 3000);
+            } else {
+                log("Max reconnection attempts reached", "error");
+            }
+        };
+        
+        ws.onerror = (err) => {
+            log("WebSocket error occurred", "error");
+        };
+    } catch (err) {
+        log("Failed to initialize connection: " + err.message, "error");
+    }
+}
+
+function updateUptime() {
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    const hours = String(Math.floor(elapsed / 3600)).padStart(2, '0');
+    const minutes = String(Math.floor((elapsed % 3600) / 60)).padStart(2, '0');
+    const seconds = String(elapsed % 60).padStart(2, '0');
+    document.getElementById("uptime").textContent = `${hours}:${minutes}:${seconds}`;
+}
+
+document.getElementById("inp").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && e.target.value.trim() !== "") {
+        const command = e.target.value;
+        
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(command);
+            log(command, "sent");
+        } else {
+            log("Cannot send message: not connected", "error");
+        }
+        
+        e.target.value = "";
+    }
+});
+
+// Initialize
+log("System boot sequence initiated...", "system");
+log("Loading terminal interface...", "system");
+connect();
+setInterval(updateUptime, 1000);
+
+// Focus input on load
+document.getElementById("inp").focus();
+</script>
+
+</body>
+</html>
